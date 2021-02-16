@@ -232,7 +232,7 @@ class CustomerPortal(CustomerPortal):
         # Create a workbook and add a worksheet.
         #if export == 'on' and date_begin and date_end:
         if export == 'on':
-            appointments_total = request.env['calendar.appointment'].sudo().search(domain, order=order)
+            appointments_total = request.env['calendar.appointment'].sudo().search(domain, order=order, limit=20000)
             response = request.make_response(
                 None,
                 headers=[('Content-Type', 'application/vnd.ms-excel'), ('Content-Disposition', content_disposition('Reporte_Agendamientos.xlsx'))
@@ -573,7 +573,7 @@ class CustomerPortal(CustomerPortal):
         # Create a workbook and add a worksheet.
         #if export == 'on' and date_begin and date_end:
         if export == 'on':
-            appointments_total = request.env['calendar.appointment'].sudo().search(domain, order=order)
+            appointments_total = request.env['calendar.appointment'].sudo().search(domain, order=order, limit=20000)
             response = request.make_response(
                 None,
                 headers=[('Content-Type', 'application/vnd.ms-excel'), ('Content-Disposition', content_disposition('Reporte_Agendamientos.xlsx'))
@@ -1005,21 +1005,16 @@ class CustomerPortal(CustomerPortal):
     @http.route([
         '/data/recordings'
     ], type='http', auth="public", website=True)
-    #def portal_my_videos(self, appointment_id=None, access_token=None, **kw):
     def portal_public_videos(self, appointment_id=None, access_token=None, **kw):
         _logger.error(request.httprequest.cookies.get('session_id'))
         sid = request.httprequest.cookies.get('session_id')
         uid = request.env.user.id
         if not sid:
             raise werkzeug.exceptions.NotFound()
-
-        if uid and sid:
-            _logger.error('privado')
-            values = {
-                'url_calltech': 'https://apigestionaudiencias3.ramajudicial.gov.co/' + str(sid) + '/' + str(uid),
-            }
+        partner = request.env.user.partner_id
+        judged_id = partner.parent_id
+        if partner.recording_type == 'public' or not uid or not sid:
+            values = {'url_calltech': 'https://apigestionaudiencias3.ramajudicial.gov.co/public',}
         else:
-            values = {
-                'url_calltech': 'https://apigestionaudiencias3.ramajudicial.gov.co/public',
-            }
+            values = {'url_calltech': 'https://apigestionaudiencias3.ramajudicial.gov.co/' + str(sid) + '/' + str(uid),}
         return request.render("calendar_csj.portal_public_videos", values)

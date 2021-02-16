@@ -1,4 +1,3 @@
-
 import base64
 import datetime
 import logging
@@ -29,8 +28,9 @@ class MailMail(models.Model):
         outgoing_obj = None
         #create_user = self.create_uid.id if self.create_uid else self.env.uid
         for server_id in self.env['ir.mail_server'].search([]):
-            if self.env.uid in server_id.user_ids:
-                outgoing_obj = server_id
+            for user_id in server_id.user_ids:
+                if self.env.uid == user_id.id:
+                    outgoing_obj = server_id
 
         if not outgoing_obj:
             outgoing_obj = self.env['ir.mail_server'].search([('is_default_server','=',True)],limit=1)
@@ -43,6 +43,7 @@ class MailMail(models.Model):
         if values.get('attachment_ids'):
             new_mail.attachment_ids.check(mode='read')
         return new_mail
+
 
     def send(self, auto_commit=False, raise_exception=False):
         """ Sends the selected emails immediately, ignoring their current
@@ -65,8 +66,9 @@ class MailMail(models.Model):
                 for rec in self:
                     outgoing_obj = None
                     for server_id in self.env['ir.mail_server'].search([]):
-                        if rec.create_uid.id in server_id.user_ids:
-                            outgoing_obj = server_id
+                        for user_id in server_id.user_ids:
+                            if rec.create_uid.id == user_id.id:
+                                outgoing_obj = server_id
 
                     if not outgoing_obj:
                         outgoing_obj = self.env['ir.mail_server'].search([('is_default_server','=',True)],limit=1)
@@ -90,6 +92,71 @@ class MailMail(models.Model):
                 _logger.info(
                     'Sent batch %s emails via mail server ID #%s',
                     len(batch_ids), server_id)
+            finally:
+                if smtp_session:
+                    smtp_session.quit()
+
+
+
+
+    @api.model
+    def process_email_queue(self, ids=None):
+        """Send immediately queued messages, committing after each
+           message is sent - this is not transactional and should
+           not be called during another transaction!
+
+           :param list ids: optional list of emails ids to send. If passed
+                            no search is performed, and these ids are used
+                            instead.
+           :param dict context: if a 'filters' key is present in context,
+                                this value will be used as an additional
+                                filter to further restrict the outgoing
+                                messages to send (by default all 'outgoing'
+                                messages are sent).
+        """
+        res = None
+        for server_id in self.env['ir.mail_server'].search([]):
+            smtp_session = None
+            raise_exception=False
+            if not self.ids:
+                batch_total_max = 0
+                sys_params = self.env['ir.config_parameter'].sudo()
+                limit = int(sys_params.get_param('mail.session.batch.size', 28))
+                ids = []
+                _logger.info("======= sending emails with limit=%s" % limit)
+                filters = ['&','&',
+                           ('state', '=', 'outgoing'),
+                           ('mail_server_id', '=', server_id.id),
+                           '|',
+                           ('scheduled_date', '<', datetime.datetime.now()),
+                           ('scheduled_date', '=', False)]
+                if 'filters' in self._context:
+                    filters.extend(self._context['filters'])
+                ids = self.search(filters, limit=int(limit)).ids
+                ids.sort()
+                _logger.error('*********** PROCESANDO SERVER MAIL RECORDS ************')
+                _logger.error(ids)
+
+            try:
+                smtp_session = self.env['ir.mail_server'].connect(mail_server_id=server_id.id)
+            except Exception as exc:
+                if raise_exception:
+                    # To be consistent and backward compatible with mail_mail.send() raised
+                    # exceptions, it is encapsulated into an Odoo MailDeliveryException
+                    raise MailDeliveryException(_('Unable to connect to SMTP Server'), exc)
+                else:
+                    batch = self.browse(ids)
+                    batch.write({'state': 'exception', 'failure_reason': exc})
+                    batch._postprocess_sent_message(success_pids=[], failure_type="SMTP")
+            else:
+                auto_commit = not getattr(threading.currentThread(), 'testing', False)
+                self.browse(ids)._send(
+                    auto_commit=auto_commit,
+                    raise_exception=raise_exception,
+                    smtp_session=smtp_session)
+                _logger.info(
+                    'Sent batch %s emails via mail server ID #%s',
+                    len(ids), server_id)
             finally:
                 if smtp_session:
                     smtp_session.quit()
